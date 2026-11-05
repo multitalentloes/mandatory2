@@ -152,9 +152,9 @@ class FunctionSpace(ABC):
 class Polynomial(FunctionSpace):
     """Base class for polynomial function spaces on reference domain (-1, 1)."""
 
-    @property
+    @property # ASSIGNMENT FUNCTION
     def reference_domain(self) -> Domain:
-        raise NotImplementedError
+        return (-1, 1)
 
     @overload
     def basis_function(self, j: int, sympy: Literal[True]) -> sp.Expr: ...
@@ -163,11 +163,16 @@ class Polynomial(FunctionSpace):
     @abstractmethod
     def basis_function(self, j, sympy=False): ...
 
+    # ASSIGNMENT FUNCTION
     def derivative_basis_function(self, j: int, k: int = 1) -> ABCPolyBase:
-        raise NotImplementedError
+        func = self.basis_function(j) # get the j'th basis function
+        derivated_func = func.deriv(k) # derivate it k times
+        return derivated_func
 
+    # ASSIGNMENT FUNCTION
+    # Revisit this if needed, might need a faster one as it should be just diagonal?
     def mass_matrix(self) -> sparse.spmatrix:
-        raise NotImplementedError
+        return assemble_generic_matrix(TrialFunction(self), TestFunction(self))
 
 
 class Legendre(Polynomial):
@@ -185,8 +190,15 @@ class Legendre(Polynomial):
             return sp.legendre(j, x)
         return Leg.basis(j)
 
+    # ASSIGNMENT FUNCTION
     def L2_norm_sq(self, N: int) -> np.ndarray:
-        raise NotImplementedError
+        # I think the lecture notes showed some more neat formula, but for now I want to implement
+        # it via the full inner product
+        res = np.zeros(N)
+        for i in range(N):
+            psi_squared = Leg.basis(i) * Leg.basis(i)
+            res[i] = quad(psi_squared, float(self.domain[0]), float(self.domain[1]))[0]
+        return res
 
     def eval(self, uh: np.ndarray, xj: np.ndarray | float) -> np.ndarray:
         xj = np.atleast_1d(xj)
@@ -212,11 +224,20 @@ class Chebyshev(Polynomial):
     def weight(self, x: sp.Symbol = x) -> sp.Expr:
         return 1 / sp.sqrt(1 - x**2)
 
+    # ASSIGNMENT FUNCTION
     def L2_norm_sq(self, N: int) -> np.ndarray:
-        raise NotImplementedError
+        res = np.zeros(N)
+        for i in range(N):
+            psi_squared = Cheb.basis(i) * Cheb.basis(i)
+            res[i] = quad(psi_squared, float(self.domain[0]), float(self.domain[1]))[0]
+        return res
 
+    # ASSIGNMENT FUNCTION
     def eval(self, uh: np.ndarray, xj: np.ndarray | float) -> np.ndarray:
-        raise NotImplementedError
+        # basically just copied from the eval of legendre-polynomials provided above
+        xj = np.atleast_1d(xj)
+        Xj = map_reference_domain(xj, self.domain, self.reference_domain)
+        return np.polynomial.chebyshev.chebval(Xj, uh)
 
     def inner_product(self, u: sp.Expr) -> np.ndarray:
         """Inner products (u, T_i), via the substitution x = cos(theta), integrating over
@@ -292,24 +313,44 @@ class Sines(Trigonometric):
         return np.full(N, 0.5)
 
 
+# from what I understand in the readme we should use cos(jpix) as basis psi_j here
+# why the sin was (j+1) I am not really sure, probably to some specific derivate on the side (neuman)
 class Cosines(Trigonometric):
+    # ASSIGNMENT FUNCTION
     def __init__(
         self, N: int, domain: Domain = (0, 1), bc: BC = (0, 0), constraint: int = 0
     ) -> None:
-        raise NotImplementedError
+        Trigonometric.__init__(self, N, domain=domain)
+        self.B = Neumann(bc, domain, self.reference_domain)
 
     @overload
     def basis_function(self, j: int, sympy: Literal[True]) -> sp.Expr: ...
     @overload
     def basis_function(self, j: int, sympy: Literal[False] = False) -> BasisCallable: ...
+    # ASSIGNMENT FUNCTION
     def basis_function(self, j, sympy=False):
-        raise NotImplementedError
+        return sp.cos(j * sp.pi * x)
 
+    # ASSIGNMENT FUNCTION
     def derivative_basis_function(self, j: int, k: int = 1) -> BasisCallable:
-        raise NotImplementedError
+        scale = (j*sp.pi) ** k
+        remainder = k%4
+        if remainder == 0:
+            return lambda Xj: sp.cos(j*sp.pi*Xj) * scale
+        elif remainder == 1:
+            return lambda Xj: -sp.sin(j*sp.pi*Xj) * scale
+        elif remainder == 2:
+            return lambda Xj: -sp.cos(j*sp.pi*Xj) * scale
+        else:
+            return lambda Xj: sp.sin(j*sp.pi*Xj) * scale
 
+    # ASSIGNMENT FUNCTION
     def L2_norm_sq(self, N: int) -> np.ndarray:
-        raise NotImplementedError
+        res = np.zeros(N)
+        for i in range(N):
+            psi_squared = self.basis_function(i) ** 2
+            res[i] = quad(psi_squared, float(self.domain[0]), float(self.domain[1]))[0]
+        return res
 
 
 # Create classes to hold the boundary function
@@ -409,11 +450,13 @@ class DirichletLegendre(Composite, Legendre):
     def basis_function(self, j: int, sympy: Literal[True]) -> sp.Expr: ...
     @overload
     def basis_function(self, j: int, sympy: Literal[False] = False) -> Leg: ...
+    # ASSIGNMENT FUNCTION
     def basis_function(self, j, sympy=False):
         raise NotImplementedError
 
 
 class NeumannLegendre(Composite, Legendre):
+    # ASSIGNMENT FUNCTION
     def __init__(
         self, N: int, domain: Domain = (-1, 1), bc: BC = (0, 0), constraint: int = 0
     ) -> None:
@@ -423,6 +466,7 @@ class NeumannLegendre(Composite, Legendre):
     def basis_function(self, j: int, sympy: Literal[True]) -> sp.Expr: ...
     @overload
     def basis_function(self, j: int, sympy: Literal[False] = False) -> Leg: ...
+    # ASSIGNMENT FUNCTION
     def basis_function(self, j, sympy=False):
         raise NotImplementedError
 
@@ -444,6 +488,7 @@ class DirichletChebyshev(Composite, Chebyshev):
 
 
 class NeumannChebyshev(Composite, Chebyshev):
+    # ASSIGNMENT FUNCTION
     def __init__(
         self, N: int, domain: Domain = (-1, 1), bc: BC = (0, 0), constraint: int = 0
     ) -> None:
@@ -453,6 +498,7 @@ class NeumannChebyshev(Composite, Chebyshev):
     def basis_function(self, j: int | sp.Symbol, sympy: Literal[True]) -> sp.Expr: ...
     @overload
     def basis_function(self, j: int, sympy: Literal[False] = False) -> Cheb: ...
+    # ASSIGNMENT FUNCTION
     def basis_function(self, j, sympy=False):
         raise NotImplementedError
 
@@ -509,6 +555,27 @@ def assemble_generic_matrix(u: TrialFunction, v: TestFunction) -> np.ndarray:
             if symmetric:
                 D[j, i] = D[i, j]
     return D
+
+# def assemble_diag_matrix(u: TrialFunction, v: TestFunction) -> np.ndarray:
+#     """Assemble the bilinear form matrix (u^(du), v^(dv)) by numerical quadrature,
+#     using the correct weight (e.g. for Chebyshev)"""
+#     assert isinstance(u, TrialFunction)
+#     assert isinstance(v, TestFunction)
+#     V = v.function_space
+#     assert u.function_space == V
+#     r = V.reference_domain
+#     D = np.zeros((V.N + 1, V.N + 1)) # maybe should not allocate full matrix but whatever for now
+#     cheb = V.weight() == 1 / sp.sqrt(1 - x**2)
+#     w = {"weight": "alg" if cheb else None, "wvar": (-0.5, -0.5) if cheb else None}
+
+#     def uv(Xj, i, j):
+#         return V.evaluate_derivative_basis_function(
+#             Xj, i, k=v.num_derivatives
+#         ) * V.evaluate_derivative_basis_function(Xj, j, k=u.num_derivatives)
+
+#     for i in range(V.N + 1):
+#             D[i, i] = quad(uv, float(r[0]), float(r[1]), args=(i, i), **w)[0]
+#     return D
 
 
 @overload
