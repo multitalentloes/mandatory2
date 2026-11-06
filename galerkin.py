@@ -170,9 +170,10 @@ class Polynomial(FunctionSpace):
         return derivated_func
 
     # ASSIGNMENT FUNCTION
-    # Revisit this if needed, might need a faster one as it should be just diagonal?
     def mass_matrix(self) -> sparse.spmatrix:
-        return assemble_generic_matrix(TrialFunction(self), TestFunction(self))
+        mat = assemble_generic_matrix(TrialFunction(self), TestFunction(self))
+        return sparse.csr_matrix(mat)
+
 
 
 class Legendre(Polynomial):
@@ -197,7 +198,7 @@ class Legendre(Polynomial):
         res = np.zeros(N)
         for i in range(N):
             psi_squared = Leg.basis(i) * Leg.basis(i)
-            res[i] = quad(psi_squared, float(self.domain[0]), float(self.domain[1]))[0]
+            res[i] = quad(psi_squared, -1, 1)[0]
         return res
 
     def eval(self, uh: np.ndarray, xj: np.ndarray | float) -> np.ndarray:
@@ -228,8 +229,10 @@ class Chebyshev(Polynomial):
     def L2_norm_sq(self, N: int) -> np.ndarray:
         res = np.zeros(N)
         for i in range(N):
-            psi_squared = Cheb.basis(i) * Cheb.basis(i)
-            res[i] = quad(psi_squared, float(self.domain[0]), float(self.domain[1]))[0]
+            def psi_squared(t):
+                psi_squared_w_expr = sp.cos(i * sp.acos(x)) ** 2 * self.weight()
+                return sp.lambdify(x, psi_squared_w_expr)(t)
+            res[i] = quad(psi_squared, -1, 1)[0]
         return res
 
     # ASSIGNMENT FUNCTION
@@ -329,27 +332,31 @@ class Cosines(Trigonometric):
     def basis_function(self, j: int, sympy: Literal[False] = False) -> BasisCallable: ...
     # ASSIGNMENT FUNCTION
     def basis_function(self, j, sympy=False):
-        return sp.cos(j * sp.pi * x)
+        if sympy:
+            return sp.cos(j * sp.pi * x)
+        return lambda Xj: np.cos(j * np.pi * Xj)
 
     # ASSIGNMENT FUNCTION
     def derivative_basis_function(self, j: int, k: int = 1) -> BasisCallable:
-        scale = (j*sp.pi) ** k
+        scale = (j*np.pi) ** k
         remainder = k%4
         if remainder == 0:
-            return lambda Xj: sp.cos(j*sp.pi*Xj) * scale
+            return lambda Xj: np.cos(j*np.pi*Xj) * scale
         elif remainder == 1:
-            return lambda Xj: -sp.sin(j*sp.pi*Xj) * scale
+            return lambda Xj: -np.sin(j*np.pi*Xj) * scale
         elif remainder == 2:
-            return lambda Xj: -sp.cos(j*sp.pi*Xj) * scale
+            return lambda Xj: -np.cos(j*np.pi*Xj) * scale
         else:
-            return lambda Xj: sp.sin(j*sp.pi*Xj) * scale
+            return lambda Xj: np.sin(j*np.pi*Xj) * scale
 
     # ASSIGNMENT FUNCTION
     def L2_norm_sq(self, N: int) -> np.ndarray:
         res = np.zeros(N)
         for i in range(N):
-            psi_squared = self.basis_function(i) ** 2
-            res[i] = quad(psi_squared, float(self.domain[0]), float(self.domain[1]))[0]
+            def psi_squared(t):
+                psi_squared_sp = self.basis_function(i, True) * self.basis_function(i, True)
+                return sp.lambdify(x, psi_squared_sp)(t)
+            res[i] = quad(psi_squared, 0, 1)[0]
         return res
 
 
@@ -451,16 +458,22 @@ class DirichletLegendre(Composite, Legendre):
     @overload
     def basis_function(self, j: int, sympy: Literal[False] = False) -> Leg: ...
     # ASSIGNMENT FUNCTION
-    def basis_function(self, j, sympy=False):
-        raise NotImplementedError
-
+    def basis_function(self, j, sympy=False):            
+        if sympy:
+            return sp.legendre(j, x) - sp.legendre(j+2, x)
+        return Leg.basis(j) - Leg.basis(j+2)
 
 class NeumannLegendre(Composite, Legendre):
     # ASSIGNMENT FUNCTION
     def __init__(
         self, N: int, domain: Domain = (-1, 1), bc: BC = (0, 0), constraint: int = 0
     ) -> None:
-        raise NotImplementedError
+        Legendre.__init__(self, N, domain=domain)
+        self.B = Neumann(bc, domain, self.reference_domain)
+        self.S = sparse.diags((1., -1.), (0, 2), shape=(N + 1, N + 3), format="csr")
+        for i in range(N+1):
+            assert self.S[i,i+2] == -1
+            self.S[i,i+2] = -(i * (i + 1))/((i+2) * (i+3))
 
     @overload
     def basis_function(self, j: int, sympy: Literal[True]) -> sp.Expr: ...
@@ -468,7 +481,11 @@ class NeumannLegendre(Composite, Legendre):
     def basis_function(self, j: int, sympy: Literal[False] = False) -> Leg: ...
     # ASSIGNMENT FUNCTION
     def basis_function(self, j, sympy=False):
-        raise NotImplementedError
+        # should the scale be enforced here as well?
+        scale = -(j * (j + 1))/((j+2) * (j+3))
+        if sympy:
+            return sp.legendre(j, x) + scale * sp.legendre(j + 2, x)
+        return Leg.basis(j) + scale * Leg.basis(j+2)
 
 
 class DirichletChebyshev(Composite, Chebyshev):
@@ -492,7 +509,12 @@ class NeumannChebyshev(Composite, Chebyshev):
     def __init__(
         self, N: int, domain: Domain = (-1, 1), bc: BC = (0, 0), constraint: int = 0
     ) -> None:
-        raise NotImplementedError
+        Chebyshev.__init__(self, N, domain=domain)
+        self.B = Neumann(bc, domain, self.reference_domain)
+        self.S = sparse.diags((1., -1.), (0, 2), shape=(N + 1, N + 3), format="csr")
+        for i in range(N+1):
+            assert self.S[i,i+2] == -1
+            self.S[i,i+2] = -(i ** 2) / ((i+2) ** 2)
 
     @overload
     def basis_function(self, j: int | sp.Symbol, sympy: Literal[True]) -> sp.Expr: ...
@@ -500,7 +522,13 @@ class NeumannChebyshev(Composite, Chebyshev):
     def basis_function(self, j: int, sympy: Literal[False] = False) -> Cheb: ...
     # ASSIGNMENT FUNCTION
     def basis_function(self, j, sympy=False):
-        raise NotImplementedError
+        # derived this by using T'_j=(-j)^(j+1)(j^2) from lecture notes
+        # tried at first to do it as linear combination of T_j + aT_(j+1) but it failed
+        # found that it worked with a=0 and b equal to the scale below for T_j + aT_(j+1) + bT_(j+2)
+        scale = -(j ** 2) / ((j+2) ** 2)
+        if sympy:
+            return sp.cos(j * sp.acos(x)) + scale * sp.cos((j + 2) * sp.acos(x))
+        return Cheb.basis(j) + scale * Cheb.basis(j + 2)
 
 
 class BasisFunction:
@@ -633,8 +661,8 @@ def test_helmholtz() -> None:
     f = ue.diff(x, 2) + ue
     domain = (0, 10)
     for space in (
-        NeumannChebyshev,
         NeumannLegendre,
+        NeumannChebyshev,
         DirichletChebyshev,
         DirichletLegendre,
         Sines,
