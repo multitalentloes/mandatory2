@@ -481,7 +481,6 @@ class NeumannLegendre(Composite, Legendre):
     def basis_function(self, j: int, sympy: Literal[False] = False) -> Leg: ...
     # ASSIGNMENT FUNCTION
     def basis_function(self, j, sympy=False):
-        # should the scale be enforced here as well?
         scale = -(j * (j + 1))/((j+2) * (j+3))
         if sympy:
             return sp.legendre(j, x) + scale * sp.legendre(j + 2, x)
@@ -583,28 +582,6 @@ def assemble_generic_matrix(u: TrialFunction, v: TestFunction) -> np.ndarray:
             if symmetric:
                 D[j, i] = D[i, j]
     return D
-
-# def assemble_diag_matrix(u: TrialFunction, v: TestFunction) -> np.ndarray:
-#     """Assemble the bilinear form matrix (u^(du), v^(dv)) by numerical quadrature,
-#     using the correct weight (e.g. for Chebyshev)"""
-#     assert isinstance(u, TrialFunction)
-#     assert isinstance(v, TestFunction)
-#     V = v.function_space
-#     assert u.function_space == V
-#     r = V.reference_domain
-#     D = np.zeros((V.N + 1, V.N + 1)) # maybe should not allocate full matrix but whatever for now
-#     cheb = V.weight() == 1 / sp.sqrt(1 - x**2)
-#     w = {"weight": "alg" if cheb else None, "wvar": (-0.5, -0.5) if cheb else None}
-
-#     def uv(Xj, i, j):
-#         return V.evaluate_derivative_basis_function(
-#             Xj, i, k=v.num_derivatives
-#         ) * V.evaluate_derivative_basis_function(Xj, j, k=u.num_derivatives)
-
-#     for i in range(V.N + 1):
-#             D[i, i] = quad(uv, float(r[0]), float(r[1]), args=(i, i), **w)[0]
-#     return D
-
 
 @overload
 def inner(u: sp.Expr, v: TestFunction) -> np.ndarray: ...
